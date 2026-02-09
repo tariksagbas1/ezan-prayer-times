@@ -54,3 +54,6 @@ def get_times_for_gps(
         ]
 
     return {"times": response_times}
+
+
+handler = app
