@@ -3,7 +3,21 @@ from adhan import adhan
 from adhan.methods import MuslimWorldLeague, ASR_STANDARD
 from datetime import datetime, timedelta
 
-app = FastAPI()
+app = FastAPI(
+    title="Prayer Times API",
+    description="API service for calculating Islamic prayer times",
+    version="1.0.0"
+)
+
+@app.get("/")
+def root():
+    return {
+        "service": "Prayer Times API",
+        "status": "online",
+        "endpoints": {
+            "/timesForGPS": "Get prayer times for GPS coordinates"
+        }
+    }
 
 def get_turkey_params():
     # Matches Diyanet's standard angles
@@ -13,7 +27,7 @@ def get_turkey_params():
     params.update(ASR_STANDARD) # Shafi/Standard shadow method
     return params
 
-@app.get("/api/timesForGPS")
+@app.get("/timesForGPS")
 def get_times_for_gps(
     lat: float, 
     lng: float, 
@@ -54,6 +68,3 @@ def get_times_for_gps(
         ]
 
     return {"times": response_times}
-
-
-handler = app
