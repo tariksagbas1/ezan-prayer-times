@@ -15,7 +15,7 @@ def root():
         "service": "Prayer Times API",
         "status": "online",
         "endpoints": {
-            "/timesForGPS": "Get prayer times for GPS coordinates"
+            "/api/timesForGPS": "Get prayer times for GPS coordinates"
         }
     }
 
@@ -27,7 +27,7 @@ def get_turkey_params():
     params.update(ASR_STANDARD) # Shafi/Standard shadow method
     return params
 
-@app.get("/timesForGPS")
+@app.get("/api/timesForGPS")
 def get_times_for_gps(
     lat: float, 
     lng: float, 
@@ -68,3 +68,4 @@ def get_times_for_gps(
         ]
 
     return {"times": response_times}
+
