@@ -1,6 +1,5 @@
 from fastapi import FastAPI, Query
 from adhan import adhan
-from adhan.methods import MuslimWorldLeague, ASR_STANDARD
 from datetime import datetime, timedelta
 
 app = FastAPI(
@@ -20,12 +19,36 @@ def root():
     }
 
 def get_turkey_params():
-    # Matches Diyanet's standard angles
-    params = MuslimWorldLeague.copy()
-    params['fajr_angle'] = 18
-    params['isha_angle'] = 17
-    params.update(ASR_STANDARD) # Shafi/Standard shadow method
-    return params
+    # Matches Diyanet's standard angles (Turkey/Diyanet method)
+    # Try to import from methods, fallback to manual definition
+    try:
+        import adhan.methods as methods
+        # Try different possible attribute names
+        if hasattr(methods, 'MuslimWorldLeague'):
+            params = getattr(methods, 'MuslimWorldLeague').copy()
+        elif hasattr(methods, 'Methods') and hasattr(methods.Methods, 'MuslimWorldLeague'):
+            params = methods.Methods.MuslimWorldLeague.copy()
+        else:
+            raise AttributeError("Could not find MuslimWorldLeague")
+        
+        params['fajr_angle'] = 18
+        params['isha_angle'] = 17
+        
+        if hasattr(methods, 'ASR_STANDARD'):
+            params.update(getattr(methods, 'ASR_STANDARD'))
+        elif hasattr(methods, 'AsrMethod') and hasattr(methods.AsrMethod, 'STANDARD'):
+            params['asr'] = methods.AsrMethod.STANDARD
+        
+        return params
+    except (ImportError, AttributeError):
+        # Fallback: manually define parameters
+        return {
+            'fajr_angle': 18,
+            'isha_angle': 17,
+            'asr': 'standard',
+            'high_lat': 'night_middle',
+            'maghrib': '0 min',
+        }
 
 @app.get("/api/timesForGPS")
 def get_times_for_gps(
