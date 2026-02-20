@@ -212,6 +212,9 @@ def get_prayer_times(
     ikindi_adjusted = ikindi + 4.0 / 60.0
     # Ogle: add 5 minutes (safety margin after Ikindi)
     ogle_adjusted = ogle + 5.0 / 60.0
+    # Yatsi: If latitude is higher than 45 or less than -45, calculate differently
+    if lat > 45 or lat < -45:
+        yatsi = aksam_adjusted + 92.0 / 60.0 # Add 1 saat 32 dakika
     return PrayerTimesResult(
         imsak=_decimal_hour_to_hhmm(imsak),
         gunes=_decimal_hour_to_hhmm(gunes_adjusted),
@@ -220,3 +223,35 @@ def get_prayer_times(
         aksam=_decimal_hour_to_hhmm(aksam_adjusted),
         yatsi=_decimal_hour_to_hhmm(yatsi),
     )
+"""
+istanbul = get_prayer_times(41.0082, 28.9784, "2026-02-20", -180)
+london = get_prayer_times(51.5074, -0.1278, "2026-02-20", 0)
+dubai = get_prayer_times(25.276987, 55.296233, "2026-02-20", -240)
+eindhoven = get_prayer_times(51.4416, 5.4697, "2026-02-20", -60)
+newyork = get_prayer_times(40.7128, -74.0060, "2026-02-20", +300)
+bangkok = get_prayer_times(13.7563, 100.5018, "2026-02-20", -420)
+santiago = get_prayer_times(-33.4489, -70.6693, "2026-02-20", 180)
+moscow = get_prayer_times(55.7558, 37.6173, "2026-02-20", -180)
+denhaag = get_prayer_times(52.0705, 4.3007, "2026-02-20", -60)
+stockholm = get_prayer_times(59.3293, 18.0686, "2026-02-20", -60)
+print("istanbul")
+print("calculated: ",istanbul["yatsi"], "actual: 20:10")
+print("london")
+print("calculated: ",london["yatsi"], "actual: 19:02")
+print("dubai")
+print("calculated: ",dubai["yatsi"], "actual: 19:27")
+print("eindhoven")
+print("calculated: ",eindhoven["yatsi"], "actual: 19:40")
+print("newyork")
+print("calculated: ",newyork["yatsi"], "actual: 18:57")
+print("bangkok")
+print("calculated: ",bangkok["yatsi"], "actual: 19:32")
+print("santiago")
+print("calculated: ",santiago["yatsi"], "actual: 21:52")
+print("moscow")
+print("calculated: ",moscow["yatsi"], "actual: 19:33")
+print("denhaag")
+print("calculated: ",denhaag["yatsi"], "actual: 19:44")
+print("stockholm")
+print("calculated: ",stockholm, "actual: 18:53")
+"""
