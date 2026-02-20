@@ -1,94 +1,55 @@
-from fastapi import FastAPI, Query
-from adhan import adhan
-from datetime import datetime, timedelta
+"""
+Prayer times API (Diyanet/Turkey method). Deploy to Vercel as a single FastAPI app.
+"""
+from fastapi import FastAPI, Query, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+
+from prayer_times import get_prayer_times, PrayerTimesResult
 
 app = FastAPI(
-    title="Prayer Times API",
-    description="API service for calculating Islamic prayer times",
-    version="1.0.0"
+    title="Vakit API",
+    description="Prayer times by GPS (Diyanet/Turkey calculation)",
 )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/api/timesForGPS", response_model=PrayerTimesResult)
+def times_for_gps(
+    lat: float = Query(..., description="Latitude"),
+    lng: float = Query(..., description="Longitude"),
+    date: str = Query(..., description="Date YYYY-MM-DD"),
+    days: int = Query(1, ge=1, le=365, description="Number of days (first day used for single-object response)"),
+    timezoneOffset: float = Query(..., description="Timezone offset in minutes (e.g. getTimezoneOffset())"),
+    calculationMethod: str = Query("Turkey", description="Calculation method (Turkey = Diyanet)"),
+    lang: str = Query("tr", description="Language (response keys are always Turkish)"),
+) -> PrayerTimesResult:
+    """
+    Returns prayer times for the given date and location.
+    Keys: imsak, gunes, ogle, ikindi, aksam, yatsi (24h format HH:MM).
+    """
+    if not (-90 <= lat <= 90):
+        raise HTTPException(status_code=400, detail="lat must be between -90 and 90")
+    if not (-180 <= lng <= 180):
+        raise HTTPException(status_code=400, detail="lng must be between -180 and 180")
+    try:
+        return get_prayer_times(
+            lat=lat,
+            lng=lng,
+            date=date,
+            timezone_offset_minutes=timezoneOffset,
+            calculation_method=calculationMethod,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 @app.get("/")
 def root():
-    return {
-        "service": "Prayer Times API",
-        "status": "online",
-        "endpoints": {
-            "/api/timesForGPS": "Get prayer times for GPS coordinates"
-        }
-    }
-
-def get_turkey_params():
-    # Matches Diyanet's standard angles (Turkey/Diyanet method)
-    # Try to import from methods, fallback to manual definition
-    try:
-        import adhan.methods as methods
-        # Try different possible attribute names
-        if hasattr(methods, 'MuslimWorldLeague'):
-            params = getattr(methods, 'MuslimWorldLeague').copy()
-        elif hasattr(methods, 'Methods') and hasattr(methods.Methods, 'MuslimWorldLeague'):
-            params = methods.Methods.MuslimWorldLeague.copy()
-        else:
-            raise AttributeError("Could not find MuslimWorldLeague")
-        
-        params['fajr_angle'] = 18
-        params['isha_angle'] = 17
-        
-        if hasattr(methods, 'ASR_STANDARD'):
-            params.update(getattr(methods, 'ASR_STANDARD'))
-        elif hasattr(methods, 'AsrMethod') and hasattr(methods.AsrMethod, 'STANDARD'):
-            params['asr'] = methods.AsrMethod.STANDARD
-        
-        return params
-    except (ImportError, AttributeError):
-        # Fallback: manually define parameters
-        return {
-            'fajr_angle': 18,
-            'isha_angle': 17,
-            'asr': 'standard',
-            'high_lat': 'night_middle',
-            'maghrib': '0 min',
-        }
-
-@app.get("/api/timesForGPS")
-def get_times_for_gps(
-    lat: float, 
-    lng: float, 
-    date: str, 
-    days: int = 1, 
-    timezoneOffset: int = 0, # Minutes, e.g., 180
-    calculationMethod: str = "Turkey",
-    lang: str = "tr"
-):
-    # Convert minutes to hours (e.g., 180 -> 3.0)
-    offset_hours = timezoneOffset / 60.0
-    start_date = datetime.strptime(date, "%Y-%m-%d")
-    params = get_turkey_params()
-    
-    response_times = {}
-
-    for i in range(days):
-        current_day = start_date + timedelta(days=i)
-        date_key = current_day.strftime("%Y-%m-%d")
-        
-        # Calculate for the day
-        calc = adhan(
-            day=current_day.date(),
-            location=(lat, lng),
-            parameters=params,
-            timezone_offset=offset_hours
-        )
-        
-        # Exact array structure your JS code expects:
-        # [0]: Imsak, [1]: Gunes, [2]: Ogle, [3]: Ikindi, [4]: Aksam, [5]: Yatsi
-        response_times[date_key] = [
-            calc['fajr'].strftime("%H:%M"),
-            calc['shuruq'].strftime("%H:%M"),
-            calc['zuhr'].strftime("%H:%M"),
-            calc['asr'].strftime("%H:%M"),
-            calc['maghrib'].strftime("%H:%M"),
-            calc['isha'].strftime("%H:%M")
-        ]
-
-    return {"times": response_times}
-
+    return {"service": "Vakit API", "docs": "/docs", "endpoint": "/api/timesForGPS"}

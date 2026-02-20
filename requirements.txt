@@ -1,4 +1,2 @@
-fastapi
-adhan
-uvicorn
-pytz
+fastapi>=0.115.0
+uvicorn>=0.32.0
