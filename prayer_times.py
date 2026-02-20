@@ -37,22 +37,20 @@ def _normalize_hour_24(hours: float) -> float:
 
 
 def _decimal_hour_to_hhmm(h: float) -> str:
-    """Convert decimal hours (0–24) to 'HH:MM' 24h format. Round to nearest minute."""
+    """Convert decimal hours (0–24) to 'HH:MM' 24h format."""
     h = _normalize_hour_24(h)
-    total_minutes = round(h * 60.0)
-    hour = total_minutes // 60
-    minute = total_minutes % 60
+    hour = int(math.floor(h))
+    minute = int(round((h - hour) * 60))
+    if minute >= 60:
+        minute = 0
+        hour += 1
     if hour >= 24:
         hour = 0
     return f"{hour:02d}:{minute:02d}"
 
 
-# Julian date: J2000.0 = 2000 Jan 1.5 UT
-J2000 = 2451545.0
-
-
 def _julian_date(year: int, month: int, day: int, hour_utc: float = 12.0) -> float:
-    """Julian date at given UTC time (default noon UTC). Meeus-style formula."""
+    """Julian date at given UTC time (default noon UTC)."""
     if month <= 2:
         year -= 1
         month += 12
@@ -63,44 +61,27 @@ def _julian_date(year: int, month: int, day: int, hour_utc: float = 12.0) -> flo
     return jd
 
 
-# USNO/Meeus-style solar constants (higher precision for closer match to almanac)
-# Mean anomaly of Sun (degrees): g = G_0 + G_1 * D
-_SUN_MEAN_ANOMALY_0 = 357.5291092
-_SUN_MEAN_ANOMALY_1 = 0.9856002831
-# Mean longitude of Sun (degrees): q = Q_0 + Q_1 * D
-_SUN_MEAN_LONG_0 = 280.466069
-_SUN_MEAN_LONG_1 = 0.9856473582
-# Geocentric ecliptic longitude: L = q + C1*sin(g) + C2*sin(2g)
-_SUN_LONG_C1 = 1.91559
-_SUN_LONG_C2 = 0.02009
-# Mean obliquity of ecliptic (degrees): e = E_0 + E_1 * D
-_SUN_OBLIQUITY_0 = 23.4392911
-_SUN_OBLIQUITY_1 = -0.0000003630
-# Degrees per hour of rotation
-_DEG_PER_HOUR = 15.0
-
-
 def _sun_eq_of_time_and_declination(jd: float) -> tuple[float, float]:
     """
-    Solar coordinates (higher-precision USNO/Meeus style).
-    Returns (equation of time in hours, declination in degrees).
+    USNO approximate solar coordinates. Returns (equation of time in hours, declination in degrees).
     """
-    D = jd - J2000
-    g = _normalize_angle_360(_SUN_MEAN_ANOMALY_0 + _SUN_MEAN_ANOMALY_1 * D)
-    q = _normalize_angle_360(_SUN_MEAN_LONG_0 + _SUN_MEAN_LONG_1 * D)
-    g_rad = _deg2rad(g)
-    L = _normalize_angle_360(
-        q + _SUN_LONG_C1 * math.sin(g_rad) + _SUN_LONG_C2 * math.sin(2.0 * g_rad)
-    )
-    e = _SUN_OBLIQUITY_0 + _SUN_OBLIQUITY_1 * D
+    D = jd - 2451545.0
+    g = _normalize_angle_360(357.529 + 0.98560028 * D)
+    q = _normalize_angle_360(280.459 + 0.98564736 * D)
+    L = _normalize_angle_360(q + 1.915 * math.sin(_deg2rad(g)) + 0.020 * math.sin(_deg2rad(2 * g)))
+    e = 23.439 - 0.00000036 * D
 
+    # Right ascension (same quadrant as L)
     sin_L = math.sin(_deg2rad(L))
     cos_L = math.cos(_deg2rad(L))
     cos_e = math.cos(_deg2rad(e))
     RA_rad = math.atan2(cos_e * sin_L, cos_L)
-    RA_hours = _normalize_hour_24(_rad2deg(RA_rad) / _DEG_PER_HOUR)
+    RA_hours = _normalize_hour_24(_rad2deg(RA_rad) / 15.0)
 
-    EqT = q / _DEG_PER_HOUR - RA_hours
+    # Equation of time: apparent solar time minus mean solar time (hours)
+    EqT = q / 15.0 - RA_hours
+
+    # Declination (degrees)
     decl_rad = math.asin(math.sin(_deg2rad(e)) * sin_L)
     decl = _rad2deg(decl_rad)
 
@@ -113,8 +94,9 @@ def _dhuhr_local(
     eqtime_hours: float,
 ) -> float:
     """Solar noon (Dhuhr) in local time as decimal hours. timezone_offset = UTC - local (e.g. -180 for UTC+3)."""
+    # Local time zone in hours: local = UTC - offset_minutes/60
     tz_hours = -timezone_offset_minutes / 60.0
-    return _normalize_hour_24(12.0 + tz_hours - lng_deg / _DEG_PER_HOUR - eqtime_hours)
+    return _normalize_hour_24(12.0 + tz_hours - lng_deg / 15.0 - eqtime_hours)
 
 
 def _hour_angle_below_horizon(
@@ -164,11 +146,10 @@ def _asr_hour_angle_shafi(lat_deg: float, decl_deg: float) -> float | None:
     return _rad2deg(omega_rad)
 
 
-# Diyanet: Fajr 18°, Isha 17° (exact)
+# Diyanet: Fajr 18°, Isha 17°; sunrise/sunset use 0.833° (refraction)
 FAJR_ANGLE = 18.0
 ISHA_ANGLE = 17.0
-# Sunrise/sunset: 50 arcminutes (34' refraction + 16' solar semi-diameter) = 50/60 degrees
-SUNRISE_SUNSET_ANGLE_DEG = 50.0 / 60.0  # 0.833333...
+SUNRISE_SUNSET_ANGLE = 0.833
 
 
 def get_prayer_times(
@@ -192,13 +173,14 @@ def get_prayer_times(
     eqtime, decl = _sun_eq_of_time_and_declination(jd)
 
     dhuhr = _dhuhr_local(lng, timezone_offset_minutes, eqtime)
+    # Time difference from noon in hours: omega_deg / 15
     def hours_from_noon(omega_deg: float | None) -> float:
         if omega_deg is None:
             return 0.0
-        return omega_deg / _DEG_PER_HOUR
+        return omega_deg / 15.0
 
     # Sunrise (Güneş) and Sunset
-    omega_sun = _hour_angle_below_horizon(lat, decl, SUNRISE_SUNSET_ANGLE_DEG)
+    omega_sun = _hour_angle_below_horizon(lat, decl, SUNRISE_SUNSET_ANGLE)
     sunrise_offset = hours_from_noon(omega_sun) if omega_sun is not None else 0.0
     gunes = dhuhr - sunrise_offset
     sunset = dhuhr + sunrise_offset
