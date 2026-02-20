@@ -204,11 +204,19 @@ def get_prayer_times(
     aksam = sunset
     ogle = dhuhr
 
+    # Gunes: subtract 7 minutes (safety margin before Fajr)
+    gunes_adjusted = gunes - 7.0 / 60.0
+    # Aksam: add 7 minutes (safety margin after Sunset)
+    aksam_adjusted = aksam + 7.0 / 60.0
+    # Ikindi: add 4 minutes (safety margin after Asr)
+    ikindi_adjusted = ikindi + 4.0 / 60.0
+    # Ogle: add 5 minutes (safety margin after Ikindi)
+    ogle_adjusted = ogle + 5.0 / 60.0
     return PrayerTimesResult(
         imsak=_decimal_hour_to_hhmm(imsak),
-        gunes=_decimal_hour_to_hhmm(gunes),
-        ogle=_decimal_hour_to_hhmm(ogle),
-        ikindi=_decimal_hour_to_hhmm(ikindi),
-        aksam=_decimal_hour_to_hhmm(aksam),
+        gunes=_decimal_hour_to_hhmm(gunes_adjusted),
+        ogle=_decimal_hour_to_hhmm(ogle_adjusted),
+        ikindi=_decimal_hour_to_hhmm(ikindi_adjusted),
+        aksam=_decimal_hour_to_hhmm(aksam_adjusted),
         yatsi=_decimal_hour_to_hhmm(yatsi),
     )
