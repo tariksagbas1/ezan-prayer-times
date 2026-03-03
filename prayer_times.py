@@ -4,8 +4,18 @@ Fajr: 18°, Isha: 17°, Asr: Shafi (shadow = 1 × object + noon shadow).
 """
 
 import math
+import requests
+from fastapi import HTTPException
 from typing import TypedDict
+import os
+from dotenv import load_dotenv
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
+load_dotenv()
+
+LOCATIONIQ_TOKEN = "pk.84158ce1d009c872dea9635573d5bb18"
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 class PrayerTimesResult(TypedDict):
     imsak: str
@@ -223,6 +233,42 @@ def get_prayer_times(
         aksam=_decimal_hour_to_hhmm(aksam_adjusted),
         yatsi=_decimal_hour_to_hhmm(yatsi),
     )
+
+def get_cached_prayer_times(lat: float, lng: float, date: str):
+    url = f"https://us1.locationiq.com/v1/reverse?key={LOCATIONIQ_TOKEN}&lat={lat}&lon={lng}&format=json&accept-language=tr"
+
+    try:
+        response = requests.get(url)
+        response.raise_for_status() # Check for HTTP errors
+        data = response.json()
+
+        address = data.get("address", {})
+        
+        # 'province' or 'state' maps to the City (İl)
+        city = address.get("province", "").replace("İ", "I").strip().lower()
+        print("city: ", city)
+        if city:
+            conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM cached_prayer_times WHERE city = %s AND date = %s", (city, date))
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
+            if len(rows) > 0:
+                return PrayerTimesResult(
+                    imsak=rows[0]["imsak"],
+                    gunes=rows[0]["gunes"],
+                    ogle=rows[0]["ogle"],
+                    ikindi=rows[0]["ikindi"],
+                    aksam=rows[0]["aksam"],
+                    yatsi=rows[0]["yatsi"],
+                )
+            
+    except Exception as e:
+        print(f"Error fetching location: {e}")
+        return None
+
+
 """
 istanbul = get_prayer_times(41.0082, 28.9784, "2026-02-20", -180)
 london = get_prayer_times(51.5074, -0.1278, "2026-02-20", 0)
