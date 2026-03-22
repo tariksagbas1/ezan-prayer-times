@@ -4,7 +4,7 @@ Prayer times API (Diyanet/Turkey method). Deploy to Vercel as a single FastAPI a
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from prayer_times import get_prayer_times, PrayerTimesResult, get_cached_prayer_times
+from prayer_times import get_prayer_times, PrayerTimesResult, get_cached_prayer_times, get_timezone_offset
 
 app = FastAPI(
     title="Vakit API",
@@ -44,11 +44,13 @@ def times_for_gps(
         if cached_prayer_times:
             print("Used cached prayer times: ", cached_prayer_times)
             return cached_prayer_times
+        tz = get_timezone_offset(lat, lng)
+        print("Timezone offset: ", tz)
         prayer_times = get_prayer_times(
             lat=lat,
             lng=lng,
             date=date,
-            timezone_offset_minutes=timezoneOffset,
+            timezone_offset_minutes=tz,
             calculation_method=calculationMethod,
         )
         return prayer_times

@@ -11,6 +11,9 @@ import os
 from dotenv import load_dotenv
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from timezonefinder import TimezoneFinder
+from datetime import datetime
+import pytz
 
 load_dotenv()
 
@@ -155,6 +158,24 @@ def _asr_hour_angle_shafi(lat_deg: float, decl_deg: float) -> float | None:
     omega_rad = math.acos(cos_omega)
     return _rad2deg(omega_rad)
 
+def get_timezone_offset(lat: float, lon: float) -> int:
+    """
+    Minutes offset in the same sense as JavaScript Date.getTimezoneOffset():
+    UTC minus local time (e.g. Turkey UTC+3 → -180).
+    """
+    tf = TimezoneFinder()
+    timezone_str = tf.timezone_at(lng=lon, lat=lat)
+
+    if timezone_str:
+        tz = pytz.timezone(timezone_str)
+        now = datetime.now(tz)
+        offset = now.utcoffset()
+        if offset is not None:
+            # Python: positive = east of UTC. JS getTimezoneOffset = -(that in minutes).
+            return -int(offset.total_seconds() / 60)
+
+    # Fallback: Turkey-style UTC+3 → JS offset -180
+    return -180
 
 # Diyanet: Fajr 18°, Isha 17°; sunrise/sunset use 0.833° (refraction)
 FAJR_ANGLE = 18.0
