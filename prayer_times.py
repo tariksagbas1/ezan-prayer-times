@@ -182,6 +182,53 @@ FAJR_ANGLE = 18.0
 ISHA_ANGLE = 17.0
 SUNRISE_SUNSET_ANGLE = 0.833
 
+# Diyanet Din İşleri Yüksek Kurulu — latitudes beyond 45° (see kurul.diyanet.gov.tr)
+DIYANET_HIGH_LAT_DEG = 45.0
+DIYANET_YATSI_MAX_AFTER_MAGHRIB_MIN = 80.0  # 1 h 20 min cap (madde b)
+DIYANET_IMSAK_EXTRA_MIN = 10.0  # added to akşam–yatsı gap for imsak (madde c)
+
+
+def _night_hours(sunset: float, sunrise: float) -> float:
+    """Hours from astronomical sunset to the next sunrise."""
+    if sunrise > sunset:
+        return sunrise - sunset
+    return (24.0 - sunset) + sunrise
+
+
+def _fajr_angle_based(sunrise: float, sunset: float, angle_deg: float) -> float:
+    """Angle-based high latitude Fajr (Pray Times / MWL default)."""
+    night = _night_hours(sunset, sunrise)
+    return _normalize_hour_24(sunrise - (angle_deg / 60.0) * night)
+
+
+def _isha_angle_based(sunset: float, sunrise: float, angle_deg: float) -> float:
+    """Angle-based high latitude Isha."""
+    night = _night_hours(sunset, sunrise)
+    return _normalize_hour_24(sunset + (angle_deg / 60.0) * night)
+
+
+def _diyanet_yatsi_above_45(aksam_adjusted: float, sunset: float, sunrise: float) -> float:
+    """
+  Yatsı above 45°: one-third of the night from Maghrib, capped at 1 h 20 min after Maghrib.
+    """
+    third_night = _night_hours(sunset, sunrise) / 3.0
+    offset = min(third_night, DIYANET_YATSI_MAX_AFTER_MAGHRIB_MIN / 60.0)
+    return _normalize_hour_24(aksam_adjusted + offset)
+
+
+def _diyanet_imsak_above_45_mar_sep(
+    gunes: float,
+    aksam_adjusted: float,
+    yatsi: float,
+) -> float:
+    """
+    Imsak above 45° (March–September): sunrise minus (akşam–yatsı interval + 10 min).
+    """
+    interval = yatsi - aksam_adjusted
+    if interval < 0:
+        interval += 24.0
+    return _normalize_hour_24(gunes - interval - DIYANET_IMSAK_EXTRA_MIN / 60.0)
+
 
 def get_prayer_times(
     lat: float,
@@ -216,15 +263,13 @@ def get_prayer_times(
     gunes = dhuhr - sunrise_offset
     sunset = dhuhr + sunrise_offset
 
-    # Imsak (Fajr): 18° below horizon
+    # Imsak (Fajr): 18° below horizon (or high-latitude fallback)
     omega_fajr = _hour_angle_below_horizon(lat, decl, FAJR_ANGLE)
     fajr_offset = hours_from_noon(omega_fajr) if omega_fajr is not None else 0.0
-    imsak = dhuhr - fajr_offset
 
-    # Yatsı (Isha): 17° below horizon
+    # Yatsı (Isha): 17° below horizon (or high-latitude fallback)
     omega_isha = _hour_angle_below_horizon(lat, decl, ISHA_ANGLE)
     isha_offset = hours_from_noon(omega_isha) if omega_isha is not None else 0.0
-    yatsi = dhuhr + isha_offset
 
     # İkindi (Asr): Shafi
     omega_asr = _asr_hour_angle_shafi(lat, decl)
@@ -235,17 +280,27 @@ def get_prayer_times(
     aksam = sunset
     ogle = dhuhr
 
-    # Gunes: subtract 7 minutes (safety margin before Fajr)
-    gunes_adjusted = gunes - 7.0 / 60.0
-    # Aksam: add 7 minutes (safety margin after Sunset)
     aksam_adjusted = aksam + 7.0 / 60.0
-    # Ikindi: add 4 minutes (safety margin after Asr)
+    gunes_adjusted = gunes - 7.0 / 60.0
+
+    # High-latitude Yatsı / Imsak when twilight angles are undefined
+    if omega_isha is not None:
+        yatsi = dhuhr + isha_offset
+    elif abs(lat) >= DIYANET_HIGH_LAT_DEG:
+        yatsi = _diyanet_yatsi_above_45(aksam_adjusted, sunset, gunes)
+    else:
+        yatsi = _isha_angle_based(sunset, gunes, ISHA_ANGLE)
+
+    if omega_fajr is not None:
+        imsak = dhuhr - fajr_offset
+    elif abs(lat) >= DIYANET_HIGH_LAT_DEG and 3 <= month <= 9:
+        imsak = _diyanet_imsak_above_45_mar_sep(gunes, aksam_adjusted, yatsi)
+    else:
+        imsak = _fajr_angle_based(gunes, sunset, FAJR_ANGLE)
+
+    # Remaining Diyanet safety margins
     ikindi_adjusted = ikindi + 4.0 / 60.0
-    # Ogle: add 5 minutes (safety margin after Ikindi)
     ogle_adjusted = ogle + 5.0 / 60.0
-    # Yatsi: If latitude is higher than 45 or less than -45, calculate differently
-    if lat > 45 or lat < -45:
-        yatsi = aksam_adjusted + 92.0 / 60.0 # Add 1 saat 32 dakika
     return PrayerTimesResult(
         imsak=_decimal_hour_to_hhmm(imsak),
         gunes=_decimal_hour_to_hhmm(gunes_adjusted),
