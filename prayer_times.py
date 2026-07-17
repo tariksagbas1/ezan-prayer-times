@@ -4,21 +4,28 @@ Fajr: 18°, Isha: 17°, Asr: Shafi (shadow = 1 × object + noon shadow).
 """
 
 import math
-import requests
-from fastapi import HTTPException
-from typing import TypedDict
 import os
-from dotenv import load_dotenv
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import json
+import unicodedata
+from typing import TypedDict
+import reverse_geocoder as rg
 from timezonefinder import TimezoneFinder
 from datetime import datetime
 import pytz
 
-load_dotenv()
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TURKEY_TIMES_DIR = os.path.join(BASE_DIR, "turkey-prayer-times")
 
-LOCATIONIQ_TOKEN = "pk.84158ce1d009c872dea9635573d5bb18"
-DATABASE_URL = os.environ.get("DATABASE_URL")
+# Map Turkish-specific characters to ASCII so province names match the JSON filenames.
+_TURKISH_CHAR_MAP = str.maketrans({
+    "ç": "c", "Ç": "c",
+    "ğ": "g", "Ğ": "g",
+    "ı": "i", "İ": "i",
+    "ö": "o", "Ö": "o",
+    "ş": "s", "Ş": "s",
+    "ü": "u", "Ü": "u",
+})
+
 
 class PrayerTimesResult(TypedDict):
     imsak: str
@@ -310,38 +317,73 @@ def get_prayer_times(
         yatsi=_decimal_hour_to_hhmm(yatsi),
     )
 
-def get_cached_prayer_times(lat: float, lng: float, date: str):
-    url = f"https://us1.locationiq.com/v1/reverse?key={LOCATIONIQ_TOKEN}&lat={lat}&lon={lng}&format=json&accept-language=tr"
+def _normalize_city(name: str) -> str:
+    """Turn a province name into the JSON filename stem (ascii, lowercase, no spaces)."""
+    name = name.translate(_TURKISH_CHAR_MAP)
+    name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
+    return name.strip().lower().replace(" ", "")
+
+
+def _iso_to_hhmm(value: str) -> str:
+    """Extract 'HH:MM' from an ISO timestamp like '2026-07-17T03:46:00+03:00'."""
+    return value[11:16]
+
+
+def get_cached_prayer_times(lat: float, lng: float, date: str) -> PrayerTimesResult | None:
+    """
+    Return exact scraped Diyanet prayer times for the 81 Turkish provinces.
+
+    Uses offline reverse geocoding to map coordinates -> province, then reads
+    turkey-prayer-times/{province}.json (keys are dates 'YYYY-MM-DD').
+
+    Returns None when the location is not a Turkish province, the province file
+    is missing, or the date is not present — the caller should then fall back to
+    the astronomical get_prayer_times().
+    """
+    try:
+        results = rg.search((lat, lng), mode=1, verbose=False)
+    except Exception as e:
+        print(f"reverse_geocoder error: {e}")
+        return None
+
+    if not results:
+        return None
+
+    place = results[0]
+    if place.get("cc") != "TR":
+        return None
+
+    city = _normalize_city(place.get("admin1", ""))
+    if not city:
+        return None
+
+    path = os.path.join(TURKEY_TIMES_DIR, f"{city}.json")
+    if not os.path.exists(path):
+        print(f"No prayer time file for province: {city!r}")
+        return None
 
     try:
-        response = requests.get(url)
-        response.raise_for_status() # Check for HTTP errors
-        data = response.json()
-
-        address = data.get("address", {})
-        
-        # 'province' or 'state' maps to the City (İl)
-        city = address.get("province", "").replace("İ", "I").strip().lower()
-        print("city: ", city)
-        if city:
-            conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-            cur = conn.cursor()
-            cur.execute("SELECT * FROM cached_prayer_times WHERE city = %s AND date = %s", (city, date))
-            rows = cur.fetchall()
-            cur.close()
-            conn.close()
-            if len(rows) > 0:
-                return PrayerTimesResult(
-                    imsak=rows[0]["imsak"],
-                    gunes=rows[0]["gunes"],
-                    ogle=rows[0]["ogle"],
-                    ikindi=rows[0]["ikindi"],
-                    aksam=rows[0]["aksam"],
-                    yatsi=rows[0]["yatsi"],
-                )
-            
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
     except Exception as e:
-        print(f"Error fetching location: {e}")
+        print(f"Error reading {path}: {e}")
+        return None
+
+    day = data.get(date)
+    if not day:
+        return None
+
+    try:
+        return PrayerTimesResult(
+            imsak=_iso_to_hhmm(day["imsak"]),
+            gunes=_iso_to_hhmm(day["gunes"]),
+            ogle=_iso_to_hhmm(day["ogle"]),
+            ikindi=_iso_to_hhmm(day["ikindi"]),
+            aksam=_iso_to_hhmm(day["aksam"]),
+            yatsi=_iso_to_hhmm(day["yatsi"]),
+        )
+    except (KeyError, TypeError) as e:
+        print(f"Malformed entry for {city} {date}: {e}")
         return None
 
 

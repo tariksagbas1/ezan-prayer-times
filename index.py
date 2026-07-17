@@ -19,6 +19,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Turkey has no DST and is fixed at UTC+3, so cached local times are 180 min ahead of UTC.
+TURKEY_UTC_OFFSET_MIN = 180
+
+
+def _to_utc_hhmm(hhmm: str, local_offset_minutes: int = TURKEY_UTC_OFFSET_MIN) -> str:
+    """Convert an 'HH:MM' in a fixed local offset to UTC 'HH:MM' (wraps around midnight)."""
+    total = (int(hhmm[:2]) * 60 + int(hhmm[3:5]) - local_offset_minutes) % (24 * 60)
+    return f"{total // 60:02d}:{total % 60:02d}"
+
 
 @app.get("/api/timesForGPS", response_model=PrayerTimesResult)
 def times_for_gps(
@@ -40,10 +49,10 @@ def times_for_gps(
         raise HTTPException(status_code=400, detail="lng must be between -180 and 180")
     try:
         
-        #cached_prayer_times = get_cached_prayer_times(lat, lng, date)
-        #if cached_prayer_times:
-        #    print("Used cached prayer times: ", cached_prayer_times)
-        #    return cached_prayer_times
+        cached_prayer_times = get_cached_prayer_times(lat, lng, date)
+        if cached_prayer_times:
+            print("Used cached prayer times: ", cached_prayer_times)
+            return cached_prayer_times
         
         tz = get_timezone_offset(lat, lng)
         print("Timezone offset: ", tz)
@@ -95,6 +104,22 @@ def times_for_gps_batch(
             raise HTTPException(status_code=400, detail=f"latitude out of range for id={user_id!r}")
         if not (-180 <= lng <= 180):
             raise HTTPException(status_code=400, detail=f"longitude out of range for id={user_id!r}")
+
+        # Prefer exact scraped Diyanet times for Turkish provinces (stored in UTC+3 → convert to UTC).
+        cached = get_cached_prayer_times(lat, lng, date)
+        if cached:
+            out.append(
+                {
+                    "user_id": user_id,
+                    "imsak": _to_utc_hhmm(cached["imsak"]),
+                    "gunes": _to_utc_hhmm(cached["gunes"]),
+                    "ogle": _to_utc_hhmm(cached["ogle"]),
+                    "ikindi": _to_utc_hhmm(cached["ikindi"]),
+                    "aksam": _to_utc_hhmm(cached["aksam"]),
+                    "yatsi": _to_utc_hhmm(cached["yatsi"]),
+                }
+            )
+            continue
 
         try:
             pt = get_prayer_times(

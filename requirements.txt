@@ -1,8 +1,5 @@
 fastapi>=0.115.0
 uvicorn>=0.32.0
-psycopg2-binary
-requests
-dotenv
+reverse_geocoder>=1.5.1
 timezonefinder>=6.5.0
 pytz>=2024.1
-geopy>=2.4.1
