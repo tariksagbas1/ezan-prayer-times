@@ -4,7 +4,13 @@ Prayer times API (Diyanet/Turkey method). Deploy to Vercel as a single FastAPI a
 from fastapi import FastAPI, Query, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 
-from prayer_times import get_prayer_times, PrayerTimesResult, get_cached_prayer_times, get_timezone_offset
+from prayer_times import (
+    get_prayer_times,
+    PrayerTimesResult,
+    get_cached_prayer_times,
+    get_cached_prayer_times_range,
+    get_timezone_offset,
+)
 
 app = FastAPI(
     title="Vakit API",
@@ -146,6 +152,26 @@ def times_for_gps_batch(
     return out
 
 
+@app.get("/api/timesForLocation")
+def times_for_location(
+    city: str = Query(..., description="Province / il (e.g. istanbul)"),
+    district: str = Query(..., description="District / ilçe (e.g. kucukcekmece); use city name for province-level"),
+    start_date: str = Query(..., alias="start-date", description="Start date YYYY-MM-DD"),
+    end_date: str = Query(..., alias="end-date", description="End date YYYY-MM-DD"),
+):
+    """
+    Cached Diyanet times only (Turkey local / GMT+3).
+    Response: { "YYYY-MM-DD": { imsak, gunes, ogle, ikindi, aksam, yatsi }, ... }
+    Returns 404 if any day in the range is missing from the cache.
+    """
+    try:
+        return get_cached_prayer_times_range(city, district, start_date, end_date)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
 @app.get("/")
 def root():
     return {
@@ -153,4 +179,5 @@ def root():
         "docs": "/docs",
         "single": "GET /api/timesForGPS",
         "batch": "POST /api/timesForGPS?multiple=1&date=YYYY-MM-DD (JSON array body)",
+        "location": "GET /api/timesForLocation?city=&district=&start-date=&end-date=",
     }

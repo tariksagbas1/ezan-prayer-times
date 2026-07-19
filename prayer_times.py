@@ -11,7 +11,7 @@ import unicodedata
 from typing import TypedDict
 import reverse_geocoder as rg
 from timezonefinder import TimezoneFinder
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from shapely.geometry import Point, shape
 from shapely import STRtree
@@ -376,6 +376,102 @@ def _fetch_prayer_row(city: str, district: str, date: str) -> PrayerTimesResult 
         aksam=row["aksam"],
         yatsi=row["yatsi"],
     )
+
+
+def get_cached_prayer_times_range(
+    city: str,
+    district: str,
+    start_date: str,
+    end_date: str,
+) -> dict[str, PrayerTimesResult]:
+    """
+    Return scraped Diyanet times (Turkey local / GMT+3) for every date in
+    [start_date, end_date] inclusive.
+
+    If the requested district has no rows in the DB, falls back to
+    city=district=<province>.
+
+    Raises ValueError for bad dates / inverted range.
+    Raises LookupError if the DB is missing or any day in the range has no row.
+    """
+    try:
+        start = datetime.strptime(start_date, "%Y-%m-%d").date()
+        end = datetime.strptime(end_date, "%Y-%m-%d").date()
+    except ValueError as e:
+        raise ValueError("start-date and end-date must be YYYY-MM-DD") from e
+    if end < start:
+        raise ValueError("end-date must be on or after start-date")
+
+    city_key = _normalize_city(city)
+    district_key = _normalize_city(district)
+    if not city_key or not district_key:
+        raise ValueError("city and district must be non-empty")
+
+    if not os.path.exists(PRAYER_DB_PATH):
+        raise LookupError("prayer times database not found")
+
+    expected_dates: list[str] = []
+    d = start
+    while d <= end:
+        expected_dates.append(d.isoformat())
+        d += timedelta(days=1)
+
+    try:
+        conn = sqlite3.connect(f"file:{PRAYER_DB_PATH}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            if district_key != city_key:
+                has_district = conn.execute(
+                    """
+                    SELECT 1 FROM prayer_times
+                    WHERE city = ? AND district = ?
+                    LIMIT 1
+                    """,
+                    (city_key, district_key),
+                ).fetchone()
+                if has_district is None:
+                    print(
+                        f"No district {city_key}/{district_key} in DB; "
+                        f"using {city_key}/{city_key}"
+                    )
+                    district_key = city_key
+
+            rows = conn.execute(
+                """
+                SELECT date, imsak, gunes, ogle, ikindi, aksam, yatsi
+                FROM prayer_times
+                WHERE city = ? AND district = ? AND date >= ? AND date <= ?
+                ORDER BY date
+                """,
+                (city_key, district_key, start_date, end_date),
+            ).fetchall()
+        finally:
+            conn.close()
+    except LookupError:
+        raise
+    except Exception as e:
+        raise LookupError(f"prayer DB query failed: {e}") from e
+
+    by_date = {
+        row["date"]: PrayerTimesResult(
+            imsak=row["imsak"],
+            gunes=row["gunes"],
+            ogle=row["ogle"],
+            ikindi=row["ikindi"],
+            aksam=row["aksam"],
+            yatsi=row["yatsi"],
+        )
+        for row in rows
+    }
+
+    missing = [day for day in expected_dates if day not in by_date]
+    if missing:
+        raise LookupError(
+            f"no cached times for {city_key}/{district_key}; "
+            f"missing {len(missing)} day(s) e.g. {missing[0]}"
+        )
+
+    return {day: by_date[day] for day in expected_dates}
 
 
 def _load_district_index() -> tuple[STRtree, list]:
