@@ -6,15 +6,29 @@ Fajr: 18°, Isha: 17°, Asr: Shafi (shadow = 1 × object + noon shadow).
 import math
 import os
 import json
+import sqlite3
 import unicodedata
 from typing import TypedDict
 import reverse_geocoder as rg
 from timezonefinder import TimezoneFinder
 from datetime import datetime
 import pytz
+from shapely.geometry import Point, shape
+from shapely import STRtree
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TURKEY_TIMES_DIR = os.path.join(BASE_DIR, "turkey-prayer-times")
+PRAYER_DB_PATH = os.path.join(BASE_DIR, "prayer-times.db")
+DISTRICT_GEOJSON_PATH = os.path.join(
+    BASE_DIR,
+    "geoBoundaries-TUR-ADM2-all",
+    "geoBoundaries-TUR-ADM2_simplified.geojson",
+)
+
+# Lazily built once: spatial index over Turkish ilçe polygons.
+_district_tree: STRtree | None = None
+_district_names: list[str] = []
+_district_geoms: list = []
 
 # Map Turkish-specific characters to ASCII so province names match the JSON filenames.
 _TURKISH_CHAR_MAP = str.maketrans({
@@ -329,16 +343,101 @@ def _iso_to_hhmm(value: str) -> str:
     return value[11:16]
 
 
+def _fetch_prayer_row(city: str, district: str, date: str) -> PrayerTimesResult | None:
+    """Look up one day in prayer-times.db. Returns None if missing."""
+    if not os.path.exists(PRAYER_DB_PATH):
+        print(f"prayer DB not found: {PRAYER_DB_PATH}")
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{PRAYER_DB_PATH}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                """
+                SELECT imsak, gunes, ogle, ikindi, aksam, yatsi
+                FROM prayer_times
+                WHERE city = ? AND district = ? AND date = ?
+                """,
+                (city, district, date),
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"prayer DB query error: {e}")
+        return None
+
+    if row is None:
+        return None
+    return PrayerTimesResult(
+        imsak=row["imsak"],
+        gunes=row["gunes"],
+        ogle=row["ogle"],
+        ikindi=row["ikindi"],
+        aksam=row["aksam"],
+        yatsi=row["yatsi"],
+    )
+
+
+def _load_district_index() -> tuple[STRtree, list]:
+    """Load ADM2 GeoJSON once and build an STRtree for point-in-polygon lookups."""
+    global _district_tree, _district_names, _district_geoms
+    if _district_tree is not None:
+        return _district_tree, _district_geoms
+
+    with open(DISTRICT_GEOJSON_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    geoms = []
+    names = []
+    for feature in data["features"]:
+        geom = shape(feature["geometry"])
+        name = feature.get("properties", {}).get("shapeName")
+        if name is None or geom.is_empty:
+            continue
+        geoms.append(geom)
+        names.append(name)
+
+    _district_geoms = geoms
+    _district_names = names
+    _district_tree = STRtree(geoms)
+    return _district_tree, _district_geoms
+
+
+def get_district_name(lat: float, lng: float) -> str | None:
+    """
+    Return the Turkish ilçe (district) name containing (lat, lng), or None.
+    Uses geoBoundaries ADM2 simplified polygons (point-in-polygon).
+    GeoJSON coordinates are (lng, lat).
+    """
+    try:
+        tree, geoms = _load_district_index()
+    except Exception as e:
+        print(f"district GeoJSON load error: {e}")
+        return None
+
+    point = Point(lng, lat)
+    # Candidate indices whose bounding boxes intersect the point.
+    indices = tree.query(point)
+    for idx in indices:
+        i = int(idx)
+        if geoms[i].covers(point):
+            return _district_names[i]
+    return None
+
+
 def get_cached_prayer_times(lat: float, lng: float, date: str) -> PrayerTimesResult | None:
     """
-    Return exact scraped Diyanet prayer times for the 81 Turkish provinces.
+    Return scraped Diyanet prayer times from prayer-times.db.
 
-    Uses offline reverse geocoding to map coordinates -> province, then reads
-    turkey-prayer-times/{province}.json (keys are dates 'YYYY-MM-DD').
+    Flow:
+      1) reverse_geocoder -> province (city)
+      2) ADM2 polygon lookup -> district (ilçe)
+      3) If no district, query with city=district=<province>
+      4) Else query with city + normalized district; if that row is missing,
+         fall back to city=district=<province>
 
-    Returns None when the location is not a Turkish province, the province file
-    is missing, or the date is not present — the caller should then fall back to
-    the astronomical get_prayer_times().
+    Returns None outside Turkey or when no DB row matches — caller should
+    fall back to astronomical get_prayer_times().
     """
     try:
         results = rg.search((lat, lng), mode=1, verbose=False)
@@ -357,34 +456,24 @@ def get_cached_prayer_times(lat: float, lng: float, date: str) -> PrayerTimesRes
     if not city:
         return None
 
-    path = os.path.join(TURKEY_TIMES_DIR, f"{city}.json")
-    if not os.path.exists(path):
-        print(f"No prayer time file for province: {city!r}")
-        return None
+    raw_district = get_district_name(lat, lng)
+    if raw_district:
+        district = _normalize_city(raw_district)
+    else:
+        district = city
 
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception as e:
-        print(f"Error reading {path}: {e}")
-        return None
+    print(f"province={city!r} district={district!r} (raw={raw_district!r})")
 
-    day = data.get(date)
-    if not day:
-        return None
+    result = _fetch_prayer_row(city, district, date)
+    if result is not None:
+        return result
 
-    try:
-        return PrayerTimesResult(
-            imsak=_iso_to_hhmm(day["imsak"]),
-            gunes=_iso_to_hhmm(day["gunes"]),
-            ogle=_iso_to_hhmm(day["ogle"]),
-            ikindi=_iso_to_hhmm(day["ikindi"]),
-            aksam=_iso_to_hhmm(day["aksam"]),
-            yatsi=_iso_to_hhmm(day["yatsi"]),
-        )
-    except (KeyError, TypeError) as e:
-        print(f"Malformed entry for {city} {date}: {e}")
-        return None
+    # District known but not in DB (partial scrape) → province-level row
+    if district != city:
+        print(f"No DB row for {city}/{district}/{date}; trying {city}/{city}")
+        return _fetch_prayer_row(city, city, date)
+
+    return None
 
 
 """

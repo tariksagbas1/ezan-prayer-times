@@ -3,3 +3,4 @@ uvicorn>=0.32.0
 reverse_geocoder>=1.5.1
 timezonefinder>=6.5.0
 pytz>=2024.1
+shapely>=2.0.0
